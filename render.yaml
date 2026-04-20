@@ -1,0 +1,11 @@
+# render.yaml — à mettre à la racine du dossier backend
+services:
+  - type: web
+    name: portfolio-api
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
