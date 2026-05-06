@@ -49,6 +49,10 @@ app.get('/health', (req, res) => {
     database: 'connected'
   });
 });
+// Ajoute cette route APRÈS /health existante
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+});
 
 // API Routes
 const authRoutes = require('./routes/auth.routes');

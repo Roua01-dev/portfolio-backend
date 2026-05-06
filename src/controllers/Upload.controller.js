@@ -1,79 +1,45 @@
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const sharp = require('sharp');
 const PersonalInfo = require('../models/PersonalInf.js');
 
 // ============================================================
-// CONFIGURATION MULTER
+// CONFIGURATION CLOUDINARY
 // ============================================================
-
-const uploadsDir = path.join(__dirname, '../uploads');
-const profileDir = path.join(uploadsDir, 'profile');
-const resumesDir = path.join(uploadsDir, 'resumes');
-
-// Créer les dossiers s'ils n'existent pas
-[uploadsDir, profileDir, resumesDir].forEach(dir => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Configuration du stockage
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    let folder = profileDir;
-    
-    if (file.fieldname === 'profileImage') {
-      folder = profileDir;
-    } else if (file.fieldname === 'resume') {
-      folder = resumesDir;
-    }
-    
-    cb(null, folder);
+// Storage Cloudinary pour les images de profil
+const profileStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'portfolio/profile',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+    transformation: [{ width: 500, height: 500, crop: 'fill', gravity: 'face' }],
   },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `profile-${Date.now()}${ext}`);
-  }
 });
 
-// Filtre pour valider les fichiers
-const fileFilter = (req, file, cb) => {
-  if (file.fieldname === 'profileImage') {
-    const allowedTypes = /jpeg|jpg|png|webp/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-    
-    if (extname && mimetype) {
-      return cb(null, true);
-    } else {
-      return cb(new Error('Only image files (jpeg, jpg, png, webp) are allowed!'));
-    }
-  }
-  
-  if (file.fieldname === 'resume') {
-    const allowedTypes = /pdf/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-    
-    if (extname && mimetype) {
-      return cb(null, true);
-    } else {
-      return cb(new Error('Only PDF files are allowed for resume!'));
-    }
-  }
-  
-  cb(new Error('Unknown field'));
-};
-
-// Middleware multer
-const upload = multer({
-  storage: storage,
-  limits: {
-    fileSize: 5 * 1024 * 1024,
+// Storage Cloudinary pour les CVs (PDF)
+const resumeStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'portfolio/resumes',
+    allowed_formats: ['pdf'],
+    resource_type: 'raw',
   },
-  fileFilter: fileFilter
+});
+
+const uploadProfileMulter = multer({
+  storage: profileStorage,
+  limits: { fileSize: 5 * 1024 * 1024 },
+});
+
+const uploadResumeMulter = multer({
+  storage: resumeStorage,
+  limits: { fileSize: 10 * 1024 * 1024 },
 });
 
 // ============================================================
@@ -85,46 +51,28 @@ const upload = multer({
  * POST /api/upload/profile-image
  */
 exports.uploadProfileImage = [
-  upload.single('profileImage'),
+  uploadProfileMulter.single('profileImage'),
   async (req, res, next) => {
     try {
       if (!req.file) {
         return res.status(400).json({
           success: false,
-          message: 'No file uploaded'
+          message: 'No file uploaded',
         });
       }
-      
-      // Optimiser l'image avec Sharp
-      const optimizedPath = path.join(
-        profileDir,
-        'optimized-' + req.file.filename
-      );
-      
-      await sharp(req.file.path)
-        .resize(800, 800, {
-          fit: 'cover',
-          position: 'center'
-        })
-        .jpeg({ quality: 85 })
-        .toFile(optimizedPath);
-      
-      // Supprimer l'image originale
-      fs.unlinkSync(req.file.path);
-      
-      // Renommer l'image optimisée
-      fs.renameSync(optimizedPath, req.file.path);
-      
-      // URL publique
-      const imageUrl = `/uploads/profile/${req.file.filename}`;
-      
+
+      // Cloudinary retourne l'URL complète dans req.file.path
+      const imageUrl = req.file.path; // https://res.cloudinary.com/...
+
+      console.log('✅ Image uploadée sur Cloudinary:', imageUrl);
+
       // Mettre à jour la base de données
       const info = await PersonalInfo.findOneAndUpdate(
         {},
         { profileImageUrl: imageUrl },
         { upsert: true, new: true }
       );
-      
+
       res.json({
         success: true,
         message: 'Profile image uploaded successfully',
@@ -132,14 +80,13 @@ exports.uploadProfileImage = [
           filename: req.file.filename,
           url: imageUrl,
           profileImageUrl: imageUrl,
-          info: info
-        }
+          info: info,
+        },
       });
-      
     } catch (error) {
       next(error);
     }
-  }
+  },
 ];
 
 /**
@@ -147,32 +94,33 @@ exports.uploadProfileImage = [
  * POST /api/upload/resume
  */
 exports.uploadResume = [
-  upload.single('resume'),
+  uploadResumeMulter.single('resume'),
   async (req, res, next) => {
     try {
       if (!req.file) {
         return res.status(400).json({
           success: false,
-          message: 'No file uploaded'
+          message: 'No file uploaded',
         });
       }
-      
-      const resumeUrl = `/uploads/resumes/${req.file.filename}`;
-      
+
+      const resumeUrl = req.file.path; // URL Cloudinary complète
+
+      console.log('✅ CV uploadé sur Cloudinary:', resumeUrl);
+
       res.json({
         success: true,
         message: 'Resume uploaded successfully',
         data: {
           filename: req.file.filename,
           url: resumeUrl,
-          path: req.file.path
-        }
+          path: resumeUrl,
+        },
       });
-      
     } catch (error) {
       next(error);
     }
-  }
+  },
 ];
 
 /**
@@ -182,37 +130,39 @@ exports.uploadResume = [
 exports.deleteFile = async (req, res, next) => {
   try {
     const { filename } = req.params;
-    
-    const possiblePaths = [
-      path.join(profileDir, filename),
-      path.join(resumesDir, filename)
+
+    // Supprimer depuis Cloudinary
+    // Le public_id Cloudinary est "portfolio/profile/filename" ou "portfolio/resumes/filename"
+    const possibleIds = [
+      `portfolio/profile/${filename}`,
+      `portfolio/resumes/${filename}`,
     ];
-    
-    let fileFound = false;
-    
-    for (const filePath of possiblePaths) {
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
-        fileFound = true;
-        break;
-      }
+
+    let deleted = false;
+    for (const publicId of possibleIds) {
+      try {
+        const result = await cloudinary.uploader.destroy(publicId);
+        if (result.result === 'ok') {
+          deleted = true;
+          break;
+        }
+        // Essayer aussi en raw (pour les PDFs)
+        const resultRaw = await cloudinary.uploader.destroy(publicId, {
+          resource_type: 'raw',
+        });
+        if (resultRaw.result === 'ok') {
+          deleted = true;
+          break;
+        }
+      } catch (_) {}
     }
-    
-    if (!fileFound) {
-      return res.status(404).json({
-        success: false,
-        message: 'File not found'
-      });
-    }
-    
+
     res.json({
       success: true,
-      message: 'File deleted successfully'
+      message: deleted ? 'File deleted successfully' : 'File not found on Cloudinary',
     });
-    
   } catch (error) {
     next(error);
   }
 };
 
-module.exports.upload = upload;
